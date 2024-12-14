@@ -4,11 +4,12 @@
 // Refer to the Cheerio docs here on how to parse HTML: https://cheerio.js.org/docs/basics/loading
 // Refer to Puppeteer docs here: https://pptr.dev/guides/what-is-puppeteer
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
 import puppeteer from "puppeteer";
 import { load } from "cheerio";
 import { scrapeArticle } from "./scraper";
+import { ratelimit } from "./rateLimiter";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -26,6 +27,7 @@ export async function getGroqChatCompletion(message: string) {
   let scrapedContent = "";
   if (userURL) {
     scrapedContent = await scrapeWebsite(userURL);
+    (scrapedContent = "Content from URL: \n\n"), scrapedContent;
   }
   return groq.chat.completions.create({
     messages: [
@@ -44,7 +46,6 @@ export async function getGroqChatCompletion(message: string) {
         role: "user",
         content: `
           ${message.trim()}
-          Content from url: \n\n
           ${scrapedContent}
         `.trim(),
       },
@@ -53,11 +54,12 @@ export async function getGroqChatCompletion(message: string) {
   });
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    // Parse the request body
+    const forwarded = req.headers.get("x-forwarded-for");
+    const ip = forwarded ? forwarded.split(",")[0] : "Unknown IP";
     const body = await req.json();
-
+    const { success, pending, limit, reset, remaining } = await ratelimit.limit(ip);
     // Validate the request data
     if (!body.message) {
       return NextResponse.json(
@@ -67,6 +69,9 @@ export async function POST(req: Request) {
     }
 
     // Simulated processing of the message (replace with your actual logic)
+    if (!success){
+      return NextResponse.json("Rate Limited",{status:429});
+    }
     const chatCompletion = await getGroqChatCompletion(body.message);
     const responseMessage = chatCompletion.choices[0]?.message?.content || "";
     console.log(responseMessage);
